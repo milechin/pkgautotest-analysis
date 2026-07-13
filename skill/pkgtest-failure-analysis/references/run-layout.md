@@ -1,0 +1,61 @@
+# PkgAutoTest run directory layout
+
+Reference for the `pkgtest-failure-analysis` skill: the structure of a
+[PkgAutoTest](https://github.com/bu-rcs/PkgAutoTest) Nextflow run directory and how to read it.
+
+## Top level
+
+- `out.csv` — the pipeline **input** produced by `find_qsub.py`: one row per module test to run.
+  Key columns: `module_name_version`, `module_installer`, `module_category`, `module_install_date`,
+  `test_path` (the module's `test.qsub`), `qsub_options`.
+- `work/XX/<hash>/` — one directory **per Nextflow task** (per test). `XX` = first 2 hex chars of
+  the task hash.
+- `.nextflow.log*`, `.nextflow/` — engine logs/history (task id → module → workdir; concurrency).
+- `report_<input>.csv` — the aggregate report the pipeline writes at the end via `collectFile`
+  (e.g. `report_out.csv`). **Absent if the run did not finish** — `rebuild_report.py` reconstructs it.
+
+## Files inside each `work/XX/<hash>/` task dir
+
+- `.command.sh` — the wrapper Nextflow ran. Contains `echo MODULE=<name>/<ver>` (authoritative
+  module id) and ``TEST_DIR=`dirname <test_path>` `` (the source test.qsub path).
+- `.command.err` / `.command.out` / `.command.log` — stderr / stdout of the wrapper.
+- `.exitcode` — the Nextflow task exit code.
+- `results.txt` — stdout of the module's `test.qsub`: a sequence of `Passed`/`Error` words, one per
+  command the test ran. **The Nth `Error` = the Nth command in test.qsub.**
+- `log.txt` — detailed output of the `test.qsub` commands (the richest evidence).
+- `test_metrics.csv` — the per-task result row (2 lines: header + data). Its presence means the
+  task **finished**.
+- `test/` — the copied module test dir. May have been deleted to save space; the source test.qsub
+  remains at `test_path` under `/share/pkg.8/...`.
+
+## The three outcome states (do not conflate exit code with test result)
+
+1. **PASSED** — `test_metrics.csv` present, `test_result=PASSED` (results.txt is all `Passed` and
+   the test.qsub exit code is 0).
+2. **FAILED** — `test_metrics.csv` present, `test_result=FAILED` (an `Error` appeared or a non-zero
+   exit). This is what the failure classifier explains.
+3. **INCOMPLETE** — **no `test_metrics.csv`** in a task dir that has a `.command.sh`. The task
+   started but never wrote a result — it was aborted (killed, timed out, or the run was interrupted).
+   These are re-runs, not diagnosable failures.
+
+A task dir with no `.command.sh` (rare stray) should be ignored.
+
+## `test_metrics.csv` columns
+
+`job_number, hostname, qsub_file, test_result, module, tests_passed, tests_failed,
+log_error_count, exit_code, installer, category, install_date, workdir`
+- `tests_passed`/`tests_failed` = counts of `Passed`/`Error` in `results.txt`;
+  `log_error_count` = count of `error` in `log.txt` (informational; not used for pass/fail).
+- **`workdir` may be stale**: it records the path where the run *executed*. If the run directory
+  was later moved/copied, that path differs from the current on-disk location — rewrite the prefix
+  (current run root ↔ recorded root) when following it. The analysis scripts auto-detect the
+  recorded ("official") root and emit paths under it by default (`--local-paths` to override).
+
+## How test.qsub defines pass/fail
+
+`test.qsub` does `module purge` + `module load <deps> <module>` (echoing `Passed`/`Error` on the
+load), then runs commands each followed by `if [ $? -eq 0 ]; then echo Passed; else echo Error`,
+appending detail to `$LOG_FILE` (→ `log.txt`). Some tests use a check helper that also prints
+`Executable failed to run` / `Keyword check failed` / `File existence|content check failed`
+(`test #N of M`) to stderr — captured as `harness_verdict`. To find a cause: locate the first
+failing command in test.qsub, then read its output in `log.txt`.

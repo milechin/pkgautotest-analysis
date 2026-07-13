@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Analysis outputs (generated per run, never committed here)
+analysis/
+report_out.csv
+failure_analysis.csv
+failure_summary.md
+failure_excerpts/
+
+# Pipeline run material (should never be inside this repo)
+work/
+.nextflow/
+.nextflow.log*
+out.csv
+
+# Editors / OS
+.DS_Store
+*.swp
