@@ -8,6 +8,10 @@ report_out.csv
 failure_analysis.csv
 failure_summary.md
 failure_excerpts/
+pipeline_verdict.csv
+pipeline_events.csv
+pipeline_summary.md
+pipeline_excerpts/
 
 # Pipeline run material (should never be inside this repo)
 work/
