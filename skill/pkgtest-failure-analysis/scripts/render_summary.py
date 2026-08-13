@@ -5,13 +5,16 @@ Part of the `pkgtest-failure-analysis` skill. Deterministically turns the per-te
 `failure_analysis.csv` into a grouped, human-readable `failure_summary.md`: a category
 count table, then per-module bullets (module/version, installer, the classifying evidence
 line, and the full path to the log file it came from), plus a "Needs review" section for
-`unknown` rows. All counts are computed from the CSV, not hard-coded.
+`unknown` rows. It also appends the modules `find_qsub.py` skipped before the run (from
+`skipped.log`), which are absent from the run rather than passing. All counts are computed
+from the CSV and that log, not hard-coded.
 
 Pure Python 3 standard library (3.6+); no third-party dependencies.
 """
 
 import argparse
 import csv
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -119,12 +122,62 @@ def parse_args(argv=None):
                         "(default: <run-dir>/analysis)")
     p.add_argument("--input", default=None, help="Path to failure_analysis.csv")
     p.add_argument("--output", default=None, help="Path to failure_summary.md")
+    p.add_argument("--skipped-log", default=None,
+                   help="find_qsub.py's skipped.log listing modules never tested "
+                        "(default: <run-dir>/skipped.log; omitted from the summary if absent)")
+    p.add_argument("--no-skipped", action="store_true",
+                   help="Do not append the 'Not tested' section.")
     a = p.parse_args(argv)
     run_root = find_run_root(a.run_dir)
     adir = Path(a.analysis_dir) if a.analysis_dir else run_root / "analysis"
     a.input = Path(a.input) if a.input else adir / "failure_analysis.csv"
     a.output = Path(a.output) if a.output else adir / "failure_summary.md"
+    a.skipped_log = Path(a.skipped_log) if a.skipped_log else run_root / "skipped.log"
     return a
+
+
+def parse_skipped_log(path):
+    """Parse find_qsub.py's skipped.log into [(heading, [entry, ...]), ...].
+
+    The file is a series of `-----`-separated blocks, each opening with a heading line
+    ending in ':' followed by one entry per line -- either a bare module name (the
+    blanket exclusion list) or `module/version,<pkg_dir>` (no test.qsub found). Parsed
+    generically so headings find_qsub.py adds later still render."""
+    try:
+        text = open(path, errors="replace").read()
+    except OSError:
+        return []
+    blocks = []
+    for chunk in re.split(r"^-{3,}\s*$", text, flags=re.MULTILINE):
+        lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        heading = lines[0].rstrip(":") if lines[0].endswith(":") else "(unlabeled)"
+        entries = lines[1:] if lines[0].endswith(":") else lines
+        if entries:
+            blocks.append((heading, entries))
+    return blocks
+
+
+def render_skipped(blocks, has_template_rows):
+    """Markdown for the modules find_qsub.py never handed to the pipeline."""
+    out = ["## Not tested (skipped before the run)\n"]
+    out.append("Listed in `skipped.log` by `find_qsub.py`, so these modules never became pipeline "
+               "tasks and appear nowhere in the counts above — they are **absent** from the run, "
+               "not passing. Most are hard to test automatically (GUI apps, license-bound or "
+               "interactive software, meta-packages). An entry without a version is a blanket "
+               "exclusion covering every version of that module.\n")
+    for heading, entries in blocks:
+        out.append("### %s  (%d)\n" % (heading, len(entries)))
+        for e in entries:
+            mod, _, where = e.partition(",")
+            out.append("- `%s`%s" % (mod.strip(), ("  — %s" % where.strip()) if where.strip() else ""))
+        out.append("")
+    if has_template_rows:
+        out.append("Related: `test_template_not_implemented` above is the same gap one step later — "
+                   "a `test.qsub` exists, so the module *was* tested, but the file is still the "
+                   "unmodified skeleton.\n")
+    return out
 
 
 def safe_name(module, qsub_file):
@@ -138,6 +191,8 @@ def main(argv=None):
         sys.exit("error: %s not found (run triage_failures.py first)" % a.input)
 
     rows = list(csv.DictReader(open(a.input, newline="")))
+    skipped = [] if a.no_skipped else parse_skipped_log(a.skipped_log)
+    n_skipped = sum(len(e) for _, e in skipped)
     n_failed = sum(1 for r in rows if r["test_result"] == "FAILED")
     n_incomplete = sum(1 for r in rows if r["test_result"] == "INCOMPLETE")
     by_cat = defaultdict(list)
@@ -152,13 +207,16 @@ def main(argv=None):
                "first pass + Claude adjudication of ambiguous cases). Per-test detail is in "
                "`failure_analysis.csv`; raw evidence digests are in `failure_excerpts/`.\n")
     out.append("**Scope:** %d failing tasks — %d FAILED + %d INCOMPLETE (INCOMPLETE = never "
-               "wrote a result because the task was aborted).\n" % (len(rows), n_failed, n_incomplete))
+               "wrote a result because the task was aborted).%s\n"
+               % (len(rows), n_failed, n_incomplete,
+                  " A further %d entries were never tested at all (`skipped.log`) — see "
+                  "\"Not tested\" at the end." % n_skipped if n_skipped else ""))
 
     out.append("## Categories\n")
     out.append("| Category | Count | Meaning |")
     out.append("|---|---:|---|")
     for c in order:
-        meaning = DESC.get(c, "").split(" — ")[0][:90]
+        meaning = describe(c).split(" — ")[0][:90]
         out.append("| `%s` | %d | %s |" % (c, len(by_cat[c]), meaning))
     out.append("")
     out.append(CAVEAT)
@@ -189,10 +247,14 @@ def main(argv=None):
                           safe_name(r["module"], r["qsub_file"])))
         out.append("")
 
+    if skipped:
+        out += render_skipped(skipped, "test_template_not_implemented" in by_cat)
+
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text("\n".join(out) + "\n")
-    print("Wrote %s  (%d tasks across %d categories)" % (a.output, len(rows), len(by_cat)),
-          file=sys.stderr)
+    print("Wrote %s  (%d tasks across %d categories%s)"
+          % (a.output, len(rows), len(by_cat),
+             ", %d skipped modules" % n_skipped if n_skipped else ""), file=sys.stderr)
     return 0
 
 
