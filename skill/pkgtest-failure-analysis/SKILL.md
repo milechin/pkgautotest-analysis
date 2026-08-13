@@ -68,14 +68,60 @@ aborted before finishing (killed, timed out, or the run was interrupted).
    - Update that row in `analysis/failure_analysis.csv` in place: set `category`, `confidence`,
      `method=claude`, and set `evidence` + `evidence_path` to the specific line and its file
      (match the path style already in the CSV).
-   - If a genuine, recurring pattern has no matching signature, add it to `SIGNATURES` in
-     `scripts/triage_failures.py` (keep priority order: specific/genuine above symptom-like).
+   - If a genuine pattern has no matching signature, **do not edit the skill** — record it in
+     `analysis/skill_improvement_suggestions.md` (step 5).
    Leave a row `unknown` only if the logs genuinely lack a determinable cause.
 
 4. **Render the summary.** Run `python3 "$SK/render_summary.py"` to (re)generate
    `analysis/failure_summary.md` from the (now-adjudicated) CSV — a category count table, per-module
-   bullets (module/version, installer, evidence, full `evidence_path`), and a "Needs review"
-   section. Add any run-specific narrative afterward if useful.
+   bullets (module/version, installer, evidence, full `evidence_path`), a "Needs review" section,
+   and a **"Not tested"** section listing the modules `find_qsub.py` skipped before the run (parsed
+   from `<run>/skipped.log`: the blanket exclusion list plus modules with no `test.qsub`). Those
+   never became tasks, so they are absent from every count — untested, not passing; report them that
+   way. Pass `--skipped-log PATH` if the log is elsewhere, or `--no-skipped` to omit the section.
+   Add any run-specific narrative afterward if useful.
+
+5. **Propose skill improvements (do not implement them).** If the pass revealed gaps in the skill
+   itself — a missing category, a mis-ordered or over-broad signature, undocumented noise, a
+   thin digest, a doc/script bug — write them to `analysis/skill_improvement_suggestions.md`
+   instead of changing any file under `.claude/skills/`. See "Proposing skill changes" below.
+
+## Proposing skill changes (never edit the skill in place)
+
+The skill's scripts, references, and this file are **read-only from a run directory.** They are a
+copy installed by [pkgautotest-analysis](https://github.com/milechin/pkgautotest-analysis)
+(`install.sh`); an edit here is invisible to the maintainer, is lost on the next install, and
+silently makes this run's results non-reproducible against every other run. So: change nothing
+under `.claude/skills/` — propose instead.
+
+Append to (or create) **`analysis/skill_improvement_suggestions.md`**, written so it can be pasted
+straight into a GitHub issue on that repo, or handed to Claude Code in a checkout of it as the
+implementation brief. Keep it a *proposal*: state the evidence and the intended rule, and let the
+maintainer decide.
+
+Structure it as:
+
+- **A title line** naming the skill, and one paragraph of context: which run (absolute path), how
+  many tests/failures, and how many rows the first pass got wrong or left `unknown` — the miss rate
+  is what justifies the change.
+- **One `##` section per suggestion**, ordered by value, each with: what is wrong today and the
+  wrong conclusion it produces; the concrete evidence from this run (module/version + the actual log
+  line or test.qsub line, and the digest/task path); the proposed rule — for a new category, its
+  name, priority position *relative to the existing ones* and why (specific/genuine above
+  symptom-like), a tight include regex, and an exclude regex for noise it would otherwise catch;
+  and every file that would have to change to keep things in sync (`SIGNATURES` in
+  `scripts/triage_failures.py` ↔ `references/categories.md` ↔ the `DESC` map in
+  `scripts/render_summary.py`).
+- **A "no change needed" section** for rows the first pass got *right*, so the maintainer does not
+  re-litigate them, plus any purely-cosmetic evidence-string nits.
+- **A closing priority ordering**, so a partial implementation still picks up the highest-value items.
+
+Distinguish clearly between a rule the script can decide deterministically and one that needs
+Claude's judgment — the latter belongs in `references/categories.md` as adjudication guidance, not
+in the regex table. If a suggestion needs a signature you cannot verify from this run alone, say so
+rather than proposing a broad regex.
+
+Mention the file by path when you report back, so the user can open it, file it, or discard it.
 
 ## Notes
 - Re-running `triage_failures.py` overwrites `failure_analysis.csv` (reverting Claude edits in

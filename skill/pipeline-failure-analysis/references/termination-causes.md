@@ -89,10 +89,17 @@ Genuine early/root causes rank above late symptoms. `signal_abort` outranks `com
 14. **unknown** — no signature matched and the tail gave no determinable cause; adjudicate from
     `pipeline_excerpts/termination_tail.txt`, and if still undeterminable leave `unknown`.
 
-## Extending
+## Extending — propose, don't edit
 
-When adjudication reveals a recurring genuine termination pattern with no signature, add a tuple to
-`SIGNATURES` in `scripts/diagnose_pipeline.py` at the right priority (specific/genuine above
-symptom-like), with a tight `include_regex` and an `exclude_regex` for any noise it would otherwise
-catch. **Keep three places in sync:** the `SIGNATURES` table, this file, and the `DESC` map in
-`scripts/render_pipeline_summary.py`.
+When adjudication reveals a genuine termination pattern with no signature, **do not add it to
+`SIGNATURES` yourself.** The installed skill is a read-only copy; edit it and the change is invisible
+to the maintainer, lost on the next `install.sh`, and this run stops being comparable to every other
+run.
+
+Instead write the proposal to `analysis/skill_improvement_suggestions.md` (format: see "Proposing
+skill changes" in `SKILL.md`), giving the cause name, its priority position relative to the entries
+above and why, a tight `include_regex`, an `exclude_regex` for any noise it would otherwise catch, the
+`.nextflow.log` evidence, and the three files a maintainer must keep in sync: `SIGNATURES` in
+`scripts/diagnose_pipeline.py`, this file, and the `DESC` map in
+`scripts/render_pipeline_summary.py`. Set the verdict for this run by judgment (`method=claude`) and
+move on.

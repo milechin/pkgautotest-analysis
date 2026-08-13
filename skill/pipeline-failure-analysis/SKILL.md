@@ -75,9 +75,8 @@ drill-down suspects.
    - Interpret any trailing stack trace in plain language.
    - Edit that row in `analysis/pipeline_verdict.csv` in place: set `termination_cause`, `confidence`,
      `method=claude`, and fill `interpretation` (a sentence or two on what happened and what to do).
-   - If a genuine, recurring termination pattern has no matching signature, add it to `SIGNATURES` in
-     `scripts/diagnose_pipeline.py` (keep priority order: specific/genuine above symptom-like) and to
-     `references/termination-causes.md`.
+   - If a genuine termination pattern has no matching signature, **do not edit the skill** — record
+     it in `analysis/skill_improvement_suggestions.md` (step 5).
 
 3. **Drill into suspect tasks (optional).** For the aborted/running-at-termination tasks listed in
    `pipeline_events.csv`, open their digest in `analysis/pipeline_excerpts/<module>__<tag>.txt`
@@ -88,6 +87,47 @@ drill-down suspects.
    `analysis/pipeline_summary.md` from the (now-adjudicated) CSVs: verdict + interpretation, run
    identity/lifecycle, WorkflowStats, tasks-by-phase, the suspect list, and — if `report_out.csv` is
    absent — a pointer to the sibling's `rebuild_report.py`.
+
+5. **Propose skill improvements (do not implement them).** If the pass revealed gaps in the skill
+   itself — a missing or mis-ordered termination cause, an over-broad signature, undocumented noise,
+   a thin digest, a doc/script bug — write them to `analysis/skill_improvement_suggestions.md`
+   instead of changing any file under `.claude/skills/`. See below.
+
+## Proposing skill changes (never edit the skill in place)
+
+The skill's scripts, references, and this file are **read-only from a run directory.** They are a
+copy installed by [pkgautotest-analysis](https://github.com/milechin/pkgautotest-analysis)
+(`install.sh`); an edit here is invisible to the maintainer, is lost on the next install, and
+silently makes this run's verdict non-reproducible against every other run. So: change nothing under
+`.claude/skills/` — propose instead.
+
+Append to (or create) **`analysis/skill_improvement_suggestions.md`**, written so it can be pasted
+straight into a GitHub issue on that repo, or handed to Claude Code in a checkout of it as the
+implementation brief. Both skills share this one file; head your sections with the skill name so a
+run analyzed by both does not produce an ambiguous mix. Keep it a *proposal*: state the evidence and
+the intended rule, and let the maintainer decide.
+
+Structure it as:
+
+- **A title line** naming the skill (`pipeline-failure-analysis`), and one paragraph of context:
+  which run (absolute path), which session/log (UUID + `.nextflow.log` or `.log.N`), the verdict the
+  first pass produced, and what it actually was.
+- **One `##` section per suggestion**, ordered by value, each with: what is wrong today and the wrong
+  conclusion it produces; the concrete evidence (the actual `.nextflow.log` lines, with the digest or
+  work-dir path); the proposed rule — for a new cause, its name, priority position *relative to the
+  existing ones* and why (specific/genuine above symptom-like, and a task-level non-zero `exit` is
+  never a pipeline cause), a tight include regex, and an exclude regex for the noise it would
+  otherwise catch; and every file that must change to stay in sync (`SIGNATURES` in
+  `scripts/diagnose_pipeline.py` ↔ `references/termination-causes.md` ↔ the `DESC` map in
+  `scripts/render_pipeline_summary.py`).
+- **A "no change needed" section** for what the first pass got right, so the maintainer does not
+  re-litigate it.
+- **A closing priority ordering**, so a partial implementation picks up the highest-value items.
+
+Note explicitly when a proposal would cross the scope boundary — this skill must never re-classify an
+individual test failure — and when a rule needs Claude's judgment rather than a regex (that belongs in
+`references/termination-causes.md` as adjudication guidance). Mention the file by path when you report
+back, so the user can open it, file it, or discard it.
 
 ## Notes
 - Re-running `diagnose_pipeline.py` overwrites `pipeline_verdict.csv` (reverting the step-2 edits) and

@@ -39,6 +39,20 @@ python3 "$PK/render_pipeline_summary.py"    # -> analysis/pipeline_summary.md
 
 Add `--session <uuid>` or `--log <path>` to diagnose a rotated `.nextflow.log.N` (an earlier run).
 
+## The installed skills are read-only
+
+Everything under `.claude/skills/` is a copy installed from
+[pkgautotest-analysis](https://github.com/milechin/pkgautotest-analysis) — **do not edit those
+scripts, references, or SKILL.md files from here.** Such an edit never reaches the maintainer, is
+overwritten by the next `install.sh`, and makes this run's results incomparable to other runs.
+
+When analysis reveals a gap in a skill (a missing failure category or termination cause, a
+mis-ordered signature, undocumented log noise, a doc or script bug), write it up in
+`analysis/skill_improvement_suggestions.md` — formatted so it can be filed as a GitHub issue on that
+repo, or handed to Claude Code in a checkout of it. Each skill's SKILL.md has the expected format
+under "Proposing skill changes". Editing `analysis/` itself (the CSVs, summaries, this file) is
+normal and expected.
+
 ## Re-running the pipeline from scratch
 
 To clear this run's generated artifacts (`work/`, `.nextflow/`, logs, `out.csv`, `analysis/`, …) and

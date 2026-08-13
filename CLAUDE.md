@@ -149,6 +149,38 @@ Both skills follow the same shape: **deterministic first pass + Claude judgment 
   re-runs, not diagnosable failures. Both should be re-run on a compute node before being treated as
   failures.
 
+## Where change requests come from
+
+Both skills instruct a run-dir session **never to edit the installed skill** (it is a copy; edits are
+invisible here and lost on the next `install.sh`). Instead they write
+`<run>/analysis/skill_improvement_suggestions.md` — a GitHub-issue-ready proposal listing the wrong
+conclusion produced, the evidence from that run, the proposed category/signature with its priority
+position, and the files needing sync. That file is the intended input for work in *this* repo, either
+filed as an issue or handed to Claude Code directly. The expected format lives in each skill's
+SKILL.md under "Proposing skill changes"; the read-only rule is repeated in each `references/*.md`
+"Extending" section and in `templates/CLAUDE.md`. Keep those four statements consistent.
+
+The suggestions file is **disposable**, like the rest of `analysis/`: it describes one run, that run
+may have been faulty, and `reset_run.sh` removes it along with everything else generated. It needs no
+protection in the denylist — if a proposal is worth keeping it gets filed as an issue here, and
+otherwise it is meant to be thrown away with the run.
+
+## Provenance of `harness-contract.md` (upstream lives elsewhere)
+
+That file is **distilled, not vendored**, from the private `bu-rcs/scc-agents` repo (branch
+`install_software_v2`) — chiefly
+`.claude/skills/scc-install-from-source/references/testing-and-promotion.md` (the `test.qsub`
+contract, `template_test.qsub`, PkgAutoTest's pass criterion, `find_qsub.py`, pipeline defaults) and
+`.claude/references/troubleshooting.md` (`Eqw`, "no suitable queues", exit 137, the reapers). Those
+docs in turn cite PkgAutoTest's README and the RCS `Writing-Software-Tests` procedure.
+
+So the harness contract is **not owned here**. When a fact in that file decides a classification, or
+when the harness changes, re-read upstream rather than trusting our copy (`module load gh` for the
+`gh` CLI; the repo 404s unauthenticated). Their other references — `lmod.md`,
+`sge-job-settings.md`, `containers-singularity.md`, `scc-environment.md`, `mpi-and-openmp.md`,
+`gpu-and-cuda.md`, `language-ecosystems.md` — are useful background for adjudication but are
+deliberately *not* copied here: they document installing software, not triaging tests.
+
 ## Editing a signature table
 
 Both skills carry a priority-ordered `SIGNATURES` list where **first non-excluded match wins**, with
