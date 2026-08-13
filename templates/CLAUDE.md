@@ -39,6 +39,16 @@ python3 "$PK/render_pipeline_summary.py"    # -> analysis/pipeline_summary.md
 
 Add `--session <uuid>` or `--log <path>` to diagnose a rotated `.nextflow.log.N` (an earlier run).
 
+## Re-running the pipeline from scratch
+
+To clear this run's generated artifacts (`work/`, `.nextflow/`, logs, `out.csv`, `analysis/`, …) and
+keep the launcher + installed skills, use the repo's reset script — dry-run first, then `--force`:
+
+```bash
+~/pkgautotest-analysis/reset_run.sh .            # preview what would be removed
+~/pkgautotest-analysis/reset_run.sh --force .    # delete, then: bash run_nextflow_tests.sh
+```
+
 ## References
 
 - `.claude/skills/pkgtest-failure-analysis/references/` — `run-layout.md` (run directory structure),

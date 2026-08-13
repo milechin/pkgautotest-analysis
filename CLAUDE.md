@@ -36,6 +36,12 @@ scope boundary below).
     — keep all three in sync).
   - `references/nextflow-log-format.md` — `.nextflow.log` grammar, record types, and `history`.
 - `install.sh` — copies **both** skills to `<run>/.claude/skills/`.
+- `reset_run.sh` — resets a run dir for a re-run by removing a **denylist** of generated artifacts
+  (`work/`, `.nextflow/`, `.nextflow.log*`, `out.csv`, `skipped.log`, `analysis/`, top-level
+  `report_*.csv`) while preserving the launcher and the installed `.claude/`. Dry-run by default
+  (`--force` to delete; `--exclude` to protect paths). Its denylist must stay in sync with the
+  generated/ephemeral patterns in `.gitignore` — same "keep in sync" discipline as the signature
+  tables below.
 - `templates/CLAUDE.md` — a short guide dropped into a *run* dir (do not confuse with this file).
 
 ## Scope boundary between the two skills (do not blur it)
@@ -55,11 +61,10 @@ There is no test suite, lint, or build. The scripts are **Python 3.6+, standard 
 `pip`, no third-party packages, no `module load` required** (must run on the SCC default `python3`).
 Preserve that constraint; do not add imports outside the stdlib.
 
-To exercise a change you need a real run dir. The one full run on the system is
-`/projectnb/dvm-rcs/temp/run_2026_07_10` (a SIGHUP-aborted run with rotated `.nextflow.log.1`/`.log.2`
-from earlier sessions — useful for exercising multiple termination causes). It has its own committed
-`analysis/`, so run with `--output-dir`/`--run-dir` pointing elsewhere (e.g. a scratch dir) rather
-than overwriting it.
+To exercise a change you need a real run dir — ask the user which one to use; runs are transient and
+none is referenced here on purpose. Prefer one that exercises the case you touched (e.g. an aborted
+run with rotated `.nextflow.log.N` for multiple termination causes). A run may have its own
+`analysis/`, so point `--output-dir`/`--analysis-dir` at a scratch dir rather than overwriting it.
 
 ```bash
 # test-failure skill:
@@ -68,11 +73,11 @@ python3 "$SK/rebuild_report.py"  --run-dir /path/to/run --output ...
 python3 "$SK/triage_failures.py" --run-dir /path/to/run --output ...
 python3 "$SK/render_summary.py"  --run-dir /path/to/run --output ...
 
-# pipeline-failure skill (against the real run, writing to scratch):
+# pipeline-failure skill (against a real run, writing to scratch):
 PK=skill/pipeline-failure-analysis/scripts
-python3 "$PK/diagnose_pipeline.py"       --run-dir /projectnb/dvm-rcs/temp/run_2026_07_10 --output-dir /tmp/x
-python3 "$PK/diagnose_pipeline.py" --log .../.nextflow.log.1 ...   # a rotated session
-python3 "$PK/render_pipeline_summary.py" --run-dir /projectnb/dvm-rcs/temp/run_2026_07_10 --analysis-dir /tmp/x
+python3 "$PK/diagnose_pipeline.py"       --run-dir /path/to/run --output-dir /path/to/scratch
+python3 "$PK/diagnose_pipeline.py" --log /path/to/run/.nextflow.log.1 ...   # a rotated session
+python3 "$PK/render_pipeline_summary.py" --run-dir /path/to/run --analysis-dir /path/to/scratch
 ```
 
 Every script auto-detects the run root by walking up from CWD (then from the script's own path);
