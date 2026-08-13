@@ -105,6 +105,26 @@ python3 "$PK/diagnose_pipeline.py"          # --session <uuid> / --log <path> fo
 python3 "$PK/render_pipeline_summary.py"
 ```
 
+## Reset a run (re-run from scratch)
+
+`reset_run.sh` clears a run directory's generated artifacts so the pipeline can be re-run cleanly.
+It removes only a known denylist — `work/`, `.nextflow/`, `.nextflow.log*`, `out.csv`, `skipped.log`,
+`analysis/`, top-level `report_*.csv` — and preserves the launcher (`run_nextflow_tests.sh`), the
+installed `.claude/` skills, and anything it doesn't recognize. (The launcher regenerates `out.csv`
+via `find_qsub.py` on the next run, so removing it is safe.)
+
+It is **dry-run by default** — it prints what it would remove and deletes nothing until you pass
+`--force`:
+
+```bash
+~/pkgautotest-analysis/reset_run.sh /path/to/run                 # preview (dry-run)
+~/pkgautotest-analysis/reset_run.sh --force /path/to/run         # actually delete
+~/pkgautotest-analysis/reset_run.sh --force --exclude out.csv .  # keep out.csv (e.g. pin the module snapshot)
+```
+
+`--exclude PATH` (repeatable) protects a path from removal; `RUN_DIR` defaults to the current
+directory. It refuses to run against `/`, `$HOME`, or the pkgautotest-analysis repo itself.
+
 ## Repo layout
 
 ```
@@ -122,6 +142,7 @@ skill/pipeline-failure-analysis/      # skill 2: why the Nextflow pipeline termi
   scripts/diagnose_pipeline.py        # .nextflow.log parser + termination classifier + digests
   scripts/render_pipeline_summary.py  # pipeline_verdict.csv + pipeline_events.csv -> summary.md
 install.sh                            # install BOTH skills into a run directory
+reset_run.sh                          # reset a run dir (remove generated artifacts) to re-run
 templates/CLAUDE.md                   # optional guide to drop into a run directory
 ```
 

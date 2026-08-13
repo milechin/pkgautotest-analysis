@@ -20,5 +20,9 @@ work/
 out.csv
 
 # Editors / OS
+.vscode/
 .DS_Store
 *.swp
+
+# Local working notes (plan documents; not part of the skill source)
+.plans/
