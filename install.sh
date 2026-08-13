@@ -5,6 +5,11 @@
 #   - pkgtest-failure-analysis   (why individual module tests failed)
 #   - pipeline-failure-analysis  (why the Nextflow pipeline itself failed/terminated)
 #
+# Each skill dir is replaced wholesale (rm -rf then cp -r), so re-installing over an earlier
+# install is safe and leaves no stale files. templates/CLAUDE.md is also installed as the run's
+# CLAUDE.md, but only if absent -- an existing one is never overwritten. Nothing else in the run
+# dir is touched: analysis/, work/, logs and CSVs are left alone.
+#
 # Usage:  ./install.sh [RUN_DIR]      (RUN_DIR defaults to the current directory)
 set -euo pipefail
 
@@ -33,6 +38,23 @@ for SKILL_SRC in "$REPO_DIR"/skill/*/; do
   cp -r "$SKILL_SRC" "$DEST"
   echo "Installed skill -> $DEST"
 done
+
+# Drop the run-dir guide in place, but never clobber one that already exists: a run's CLAUDE.md
+# may carry run-specific notes. Unlike the skills above, this file is the operator's to edit.
+TEMPLATE="$REPO_DIR/templates/CLAUDE.md"
+if [[ ! -f "$TEMPLATE" ]]; then
+  echo "WARNING: $TEMPLATE missing; skipped the run-dir CLAUDE.md" >&2
+elif [[ -e "$RUN_DIR/CLAUDE.md" ]]; then
+  if cmp -s "$TEMPLATE" "$RUN_DIR/CLAUDE.md"; then
+    echo "Run guide     -> $RUN_DIR/CLAUDE.md (already current)"
+  else
+    echo "Run guide     -> kept existing $RUN_DIR/CLAUDE.md (differs from the template;"
+    echo "                 diff against $TEMPLATE to pick up new guidance)"
+  fi
+else
+  cp "$TEMPLATE" "$RUN_DIR/CLAUDE.md"
+  echo "Installed run guide -> $RUN_DIR/CLAUDE.md"
+fi
 
 echo
 echo "Next steps:"

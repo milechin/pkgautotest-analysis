@@ -78,9 +78,14 @@ and `work/`):
 ```
 
 This copies **both** skills (with their bundled scripts) to `<run>/.claude/skills/`, so the analysis
-travels with the run directory and any colleague who opens it in Claude Code gets them. (Optionally
-also `cp ~/pkgautotest-analysis/templates/CLAUDE.md /path/to/run/CLAUDE.md` to give the run dir a
-short guide.)
+travels with the run directory and any colleague who opens it in Claude Code gets them. It also drops
+`templates/CLAUDE.md` in as the run's `CLAUDE.md` if the run does not already have one.
+
+**Re-installing over an earlier install is safe.** Each skill directory is replaced wholesale, so no
+stale files survive; an existing run `CLAUDE.md` is kept (it may hold run-specific notes — the script
+tells you to diff it against the template); and nothing else in the run dir is touched, including
+`analysis/` and any adjudicated CSVs. Re-install whenever you update this repo, so the run gets the
+current scripts.
 
 ## Use
 
@@ -144,7 +149,7 @@ skill/pipeline-failure-analysis/      # skill 2: why the Nextflow pipeline termi
   scripts/render_pipeline_summary.py  # pipeline_verdict.csv + pipeline_events.csv -> summary.md
 install.sh                            # install BOTH skills into a run directory
 reset_run.sh                          # reset a run dir (remove generated artifacts) to re-run
-templates/CLAUDE.md                   # optional guide to drop into a run directory
+templates/CLAUDE.md                   # run-dir guide; installed as <run>/CLAUDE.md if absent
 ```
 
 ## Notes

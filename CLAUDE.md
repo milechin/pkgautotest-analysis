@@ -39,7 +39,11 @@ scope boundary below).
     `SIGNATURES` table in `diagnose_pipeline.py` **and** the `DESC` map in `render_pipeline_summary.py`
     — keep all three in sync).
   - `references/nextflow-log-format.md` — `.nextflow.log` grammar, record types, and `history`.
-- `install.sh` — copies **both** skills to `<run>/.claude/skills/`.
+- `install.sh` — copies **both** skills to `<run>/.claude/skills/`, replacing each skill dir
+  wholesale (`rm -rf` then `cp -r`), so re-installing over an older install is safe and leaves no
+  stale files. It also installs `templates/CLAUDE.md` as the run's `CLAUDE.md` **only when absent**
+  (an existing one is reported, never overwritten — it may carry run-specific notes). It touches
+  nothing else in the run: `analysis/`, `work/`, logs and CSVs are left alone.
 - `reset_run.sh` — resets a run dir for a re-run by removing a **denylist** of generated artifacts
   (`work/`, `.nextflow/`, `.nextflow.log*`, `out.csv`, `skipped.log`, `analysis/`, top-level
   `report_*.csv`) while preserving the launcher and the installed `.claude/`. Dry-run by default
