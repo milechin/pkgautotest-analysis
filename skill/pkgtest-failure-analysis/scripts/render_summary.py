@@ -57,10 +57,36 @@ DESC = {
     "missing_file_or_input":
         "A missing/stale file, expected output not produced, stale lock, or bad bind mount "
         "(low confidence — verify against the test.qsub).",
+    "stray_stdout":
+        "The test failed only because something other than `Passed`/`Error` reached stdout — "
+        "PkgAutoTest requires stdout to contain nothing else, so there is no `Error` here at "
+        "all. A test-harness defect (the script's own messages belong on stderr or in "
+        "`$LOG_FILE`), not a package defect.",
+    "test_template_not_implemented":
+        "No test has been written for this package — `test.qsub` is still the unmodified "
+        "skeleton (`module load xyz/0.0.0`, `xyz_command`). NOT a broken modulefile.",
+    "mpi_interconnect_error":
+        "An InfiniBand/UCX fabric fault aborted the MPI job (`Transport retry count exceeded`) "
+        "— infrastructure, not a package defect. Re-run; if it recurs on the same node, report "
+        "that node to the fabric admins.",
+    "transient_io_error":
+        "A file the test could not open is present and readable at analysis time — the failure "
+        "was transient (filesystem hiccup, or a container missing the right `--bind`) rather "
+        "than a packaging error. Re-run.",
     "unknown":
         "No signature matched and the logs gave no determinable cause; needs human review "
         "(see the digest).",
 }
+
+
+def describe(category):
+    """Description for a category. Categories Claude adds during adjudication are not in
+    DESC, so fall back to the slug read as words rather than rendering an empty cell."""
+    if category in DESC:
+        return DESC[category]
+    return "%s (category added during adjudication; see `references/categories.md`)." % \
+        category.replace("_", " ").capitalize()
+
 
 CAVEAT = (
     "> **Interpretation:** `resource_fork_exhaustion` is the per-user process-limit artifact "
@@ -141,7 +167,7 @@ def main(argv=None):
     for c in order:
         items = sorted(by_cat[c], key=lambda r: r["module"].lower())
         out.append("### `%s`  (%d)\n" % (c, len(items)))
-        out.append(DESC.get(c, "") + "\n")
+        out.append(describe(c) + "\n")
         for r in items:
             ev = r["evidence"].strip() or "(no evidence line; see digest)"
             inst = (", installer: %s" % r["installer"]) if r.get("installer") else ""

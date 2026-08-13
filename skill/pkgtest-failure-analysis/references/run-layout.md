@@ -30,8 +30,10 @@ Reference for the `pkgtest-failure-analysis` skill: the structure of a
   module id) and ``TEST_DIR=`dirname <test_path>` `` (the source test.qsub path).
 - `.command.err` / `.command.out` / `.command.log` — stderr / stdout of the wrapper.
 - `.exitcode` — the Nextflow task exit code.
-- `results.txt` — stdout of the module's `test.qsub`: a sequence of `Passed`/`Error` words, one per
-  command the test ran. **The Nth `Error` = the Nth command in test.qsub.**
+- `results.txt` — **the job's stdout**, and the harness's whole verdict input: a sequence of
+  `Passed`/`Error` words, one per command the test ran. **The Nth `Error` = the Nth command in
+  test.qsub.** Anything else appearing here — any line that is neither word — fails the test on its
+  own (→ `stray_stdout`; see `harness-contract.md`).
 - `log.txt` — detailed output of the `test.qsub` commands (the richest evidence).
 - `test_metrics.csv` — the per-task result row (2 lines: header + data). Its presence means the
   task **finished**.
@@ -54,8 +56,14 @@ A task dir with no `.command.sh` (rare stray) should be ignored.
 
 `job_number, hostname, qsub_file, test_result, module, tests_passed, tests_failed,
 log_error_count, exit_code, installer, category, install_date, workdir`
-- `tests_passed`/`tests_failed` = counts of `Passed`/`Error` in `results.txt`;
-  `log_error_count` = count of `error` in `log.txt` (informational; not used for pass/fail).
+- `tests_passed`/`tests_failed` = literal counts of the words `Passed`/`Error` in `results.txt`;
+  `log_error_count` = count of `error` in `log.txt` (informational; **explicitly not** used for
+  pass/fail — never read it as the verdict). A `FAILED` row with `tests_failed=0` failed on one of
+  the other two criteria: a stray stdout line (→ `stray_stdout`) or a non-zero `exit_code`.
+- `exit_code` is `test.qsub`'s own exit status, distinct from the Nextflow task exit code in
+  `.exitcode`.
+- `installer`/`category`/`install_date` originate in the module's `notes.txt` (read by
+  `find_qsub.py`), so an unfilled `INSTALLER:` field shows up as an empty column here.
 - **`workdir` may be stale**: it records the path where the run *executed*. If the run directory
   was later moved/copied, that path differs from the current on-disk location — rewrite the prefix
   (current run root ↔ recorded root) when following it. The analysis scripts auto-detect the

@@ -25,6 +25,10 @@ scope boundary below).
   - `scripts/` — `rebuild_report.py`, `triage_failures.py`, `render_summary.py`.
   - `references/categories.md` — failure taxonomy + signature/noise rules (mirrors the `SIGNATURES`
     table in `triage_failures.py`).
+  - `references/harness-contract.md` — what PkgAutoTest requires of a `test.qsub`: the three-part
+    pass criterion, `template_test.qsub` verbatim, the five rules, the `newpkg` `doc/` assertion
+    helpers behind each `harness_verdict` phrase, and the scheduler-level failures (`Eqw`, "no
+    suitable queues", exit 137, the reapers). See the provenance note below.
   - `references/run-layout.md` — anatomy of a PkgAutoTest run directory.
 - `skill/pipeline-failure-analysis/` — *why the Nextflow pipeline/engine itself terminated*
   (session-level).

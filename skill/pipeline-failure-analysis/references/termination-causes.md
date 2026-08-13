@@ -55,7 +55,13 @@ Genuine early/root causes rank above late symptoms. `signal_abort` outranks `com
    Example: run `disturbed_yalow` (23 tasks aborted; the driver could no longer fork `bash`).
 6. **executor_error** (high) — the executor could not submit/launch a task. `Failed to submit process
    to grid`, `Error submitting process … for execution`, `Cannot run program`, `qsub: … (error|fail)`.
-   Excludes `error=11` (that is `driver_fork_exhaustion`).
+   Excludes `error=11` (that is `driver_fork_exhaustion`). Note the difference between the *engine*
+   failing to submit (this cause) and **one task** being rejected by SGE while the run continues:
+   with `errorStrategy 'ignore'` the latter is retried, ignored, and leaves a task dir holding only
+   `.command.sh`/`.command.run` — a per-test row, not a termination cause. What SGE rejected (an
+   unsatisfiable `qsub_options`, `Eqw`, "no suitable queues") is explained in the sibling skill's
+   `references/harness-contract.md`; surface those log lines in the digest and leave the verdict to
+   `pkgtest-failure-analysis`.
 7. **process_failed_terminate** (high) — a **non-ignored** process error aborted the whole run
    (distinct from the ignored per-test failures). `Error executing process >`, `Execution aborted due
    to an error`, `Pipeline execution stopped with the following message`.

@@ -131,6 +131,7 @@ directory. It refuses to run against `/`, `$HOME`, or the pkgautotest-analysis r
 skill/pkgtest-failure-analysis/       # skill 1: why individual tests failed
   SKILL.md
   references/categories.md            # failure taxonomy, signatures, noise-exclusion rules
+  references/harness-contract.md      # test.qsub <-> PkgAutoTest contract: pass criterion, rules
   references/run-layout.md            # PkgAutoTest run directory structure
   scripts/rebuild_report.py           # rebuild report_<input>.csv
   scripts/triage_failures.py          # regex first-pass classifier + digest generator

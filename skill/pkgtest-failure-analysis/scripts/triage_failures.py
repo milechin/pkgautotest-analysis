@@ -58,6 +58,10 @@ SIGNATURES = [
      r"SSLError|curl: \([0-9]+\)|wget:.*(unable|failed)", None),
     ("cpu_illegal_instruction", "high",
      r"Illegal instruction|illegal hardware instruction|SIGILL", None),
+    # InfiniBand/UCX fabric fault: infrastructure, not a package defect. Must outrank
+    # segfault_crash, which would otherwise catch the resulting MPI abort.
+    ("mpi_interconnect_error", "high",
+     r"Transport retry count exceeded|ib_mlx5_log\.c:[0-9]+|ibv_\w+ failed|UCX +ERROR", None),
     ("resource_fork_exhaustion", "medium",
      r"Resource temporarily unavailable|TermWidth\.lua.*index a nil|"
      r"unable to create native thread: possibly out of memory or process/resource limits|"
@@ -82,18 +86,37 @@ SIGNATURES = [
     ("disk_quota", "medium",
      r"No space left on device|Disk quota exceeded", None),
     ("missing_file_or_input", "low",
-     r"No such file or directory|does not exist|cannot stat|cannot create directory.*File exists",
-     None),
+     r"No such file or directory|does not exist|cannot stat|cannot create directory.*File exists|"
+     # A program's own open failure names the path but not errno; needed so the
+     # transient_io_error downgrade below gets a chance to re-stat it.
+     r"[Ff]ailed to open (file|input)|unable to open file",
+     # The pipeline greps $LOG_FILE unconditionally; a test.qsub that delegates to a sibling
+     # script may never write log.txt, so this line is harness noise, not the failure.
+     r"grep: .*\blog\.txt: No such file"),
 ]
 # Compile once.
 SIGNATURES = [(c, conf, re.compile(inc, re.IGNORECASE),
                re.compile(exc, re.IGNORECASE) if exc else None)
               for (c, conf, inc, exc) in SIGNATURES]
 
+# An unmodified test.qsub skeleton: the placeholder module `xyz/0.0.0` and/or the placeholder
+# command `xyz_command`. Checked BEFORE the signature table, because the resulting
+# `module(s) are unknown` would otherwise read as module_load_failed -- i.e. as a broken
+# modulefile for a package that simply has no test written yet.
+TEMPLATE_RE = re.compile(r"^\s*(module\s+load\s+.*\bxyz/0\.0\.0\b|.*\bxyz_command\b.*)\s*$",
+                         re.MULTILINE)
+
+# A path mentioned in an evidence line, used to re-stat "missing" package files (see
+# maybe_transient_io). Only /share/pkg* paths are checked: those are the read-only package
+# tree, so a file that is present and readable now was never actually missing.
+SHARE_PATH_RE = re.compile(r"(/share/pkg[^\s'\"()]*)")
+
 # Evidence sources, scanned in this order (stderr first: root errors surface there).
 EVIDENCE_FILES = [".command.err", "log.txt", ".command.out"]
 
-CSV_COLUMNS = ["module", "version", "installer", "qsub_file", "test_result", "category",
+# installer leads: the first question about a failure is usually who owns the package.
+# Consumers read this CSV by column name (csv.DictReader), never by position.
+CSV_COLUMNS = ["installer", "module", "version", "qsub_file", "test_result", "category",
                "confidence", "method", "harness_verdict", "evidence", "evidence_path", "workdir"]
 
 
@@ -224,8 +247,56 @@ def iter_failing_dirs(work_dir, only_failed):
                 yield task_dir, st
 
 
-def classify(task_dir):
+def unimplemented_template(test_path):
+    """If test.qsub is the unmodified skeleton, return its offending line, else None."""
+    if not test_path:
+        return None
+    m = TEMPLATE_RE.search(read_text(Path(test_path), ""))
+    return m.group(1).strip()[:300] if m else None
+
+
+def stray_stdout(task_dir):
+    """If the task failed only by printing extra lines to stdout, return that line.
+
+    PkgAutoTest requires all three of: >=1 `Passed` in results.txt, *zero* other lines
+    (results.txt IS the job's stdout), and exit 0. So a test can be FAILED with no `Error`
+    at all -- rule 3 of the test.qsub contract broken. Reported only when there is no
+    `Error`: if a check did fail, that failure is the cause and this is a side effect.
+    See references/harness-contract.md."""
+    text = read_text(task_dir / "results.txt", None)
+    if text is None:
+        return None
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if any(ln == "Error" for ln in lines):
+        return None
+    stray = [ln for ln in lines if ln not in ("Passed", "Error")]
+    return stray[0][:300] if stray else None
+
+
+def maybe_transient_io(category, evidence):
+    """Downgrade a 'missing' /share/pkg file that is present and readable right now.
+
+    A package file under /share/pkg is not created by the test, so if it exists and is
+    readable at analysis time it was never missing -- the open failed transiently (a GPFS
+    hiccup, or a container started without the right `--bind`). Returns a possibly-rewritten
+    (category, confidence, evidence)."""
+    if category != "missing_file_or_input":
+        return category, None, evidence
+    for path in SHARE_PATH_RE.findall(evidence):
+        if os.access(path, os.R_OK):
+            return ("transient_io_error", "medium",
+                    "%s  [file present and readable at analysis time]" % evidence)
+    return category, None, evidence
+
+
+def classify(task_dir, test_path=None, status="FAILED"):
     """Return (category, confidence, evidence_source, evidence_line)."""
+    tmpl = unimplemented_template(test_path)
+    if tmpl:
+        # Empty source: the evidence is test.qsub itself, not a file in the task dir; main()
+        # points evidence_path at the test.qsub source for this category.
+        return "test_template_not_implemented", "high", "", tmpl
+
     # Read candidate lines per source, dropping noise.
     per_source = []
     for fname in EVIDENCE_FILES:
@@ -241,6 +312,16 @@ def classify(task_dir):
             for ln in lines:
                 if inc_re.search(ln) and not (exc_re and exc_re.search(ln)):
                     return category, confidence, fname, ln.strip()[:300]
+
+    # Fallback, after the log signatures: the test failed with no `Error` at all, only an
+    # extra line on stdout. Deliberately NOT checked before the table -- a crash can itself
+    # be the stray line (a program writing to stdout instead of $LOG_FILE), and blaming the
+    # harness would hide a genuine defect. FAILED only: an INCOMPLETE task never got a
+    # verdict and its results.txt was cut off mid-run.
+    if status == "FAILED":
+        stray = stray_stdout(task_dir)
+        if stray:
+            return "stray_stdout", "high", "results.txt", stray
     return "unknown", "none", "", ""
 
 
@@ -312,8 +393,13 @@ def main(argv=None):
         qsub_file = os.path.basename(test_path) if test_path else \
             os.path.basename(by_mod.get(module, {}).get("test_path", ""))
 
-        category, confidence, ev_src, ev_line = classify(task_dir)
-        ev_path = str((task_dir / ev_src).resolve()) if ev_src else ""
+        category, confidence, ev_src, ev_line = classify(task_dir, test_path, status)
+        category, new_conf, ev_line = maybe_transient_io(category, ev_line)
+        confidence = new_conf or confidence
+        if category == "test_template_not_implemented":
+            ev_path = test_path or ""          # evidence is test.qsub at its permanent source
+        else:
+            ev_path = str((task_dir / ev_src).resolve()) if ev_src else ""
 
         rows.append({
             "module": module, "version": ver,

@@ -15,9 +15,12 @@ Classifies the root cause of each failed test in a PkgAutoTest run, judged **by 
 own logic** — ignoring warnings and known incidental noise. Outputs go to an **`analysis/`** folder
 in the run directory: `analysis/failure_analysis.csv` (per-test) and `analysis/failure_summary.md`
 (grouped, human-readable). The bundled scripts (in this skill's `scripts/`) auto-detect the run
-root (the dir containing `out.csv` and `work/`) from the current directory. See
-`references/categories.md` for the taxonomy, signatures, and noise rules, and
-`references/run-layout.md` for the run directory structure.
+root (the dir containing `work/` and the input CSV — usually `out.csv`, but it takes the launcher's
+name, e.g. `modules_crontab.csv`) from the current directory. See
+`references/categories.md` for the taxonomy, signatures, and noise rules,
+`references/harness-contract.md` for what the harness requires of a `test.qsub` (the three-part pass
+criterion, the assertion helpers behind each `harness_verdict` phrase, and why a task may never have
+run), and `references/run-layout.md` for the run directory structure.
 
 Run the commands below **from the run directory**. `$SK` is this skill's `scripts/` dir; for a
 project-level install that is `.claude/skills/pkgtest-failure-analysis/scripts` (adjust if the
@@ -27,7 +30,9 @@ skill is installed elsewhere). All scripts are Python 3.6+, standard library onl
 
 Each module's `test.qsub` first does `module load`, then runs a sequence of commands, each echoing
 `Passed` or `Error` to stdout by exit code. That stdout becomes `results.txt`; detailed command
-output goes to `log.txt`. The pipeline marks the test FAILED if any `Error` appears. **The Nth
+output goes to `log.txt`. A test `PASSED` only if **all three** hold: at least one `Passed`, **no
+other line on stdout**, and exit code 0 — so an `Error` is the usual cause of failure but not the
+only one (a stray stdout line fails a test by itself → `stray_stdout`). **The Nth
 `Error` in `results.txt` corresponds to the Nth command in `test.qsub`** — so reading the test.qsub
 tells you exactly which command failed and whether a "missing file" is the test's own input vs. a
 real dependency. `INCOMPLETE` tasks (no `test_metrics.csv`) never wrote a result — the task was
@@ -47,7 +52,7 @@ aborted before finishing (killed, timed out, or the run was interrupted).
    ```bash
    python3 "$SK/triage_failures.py"
    ```
-   This writes `analysis/failure_analysis.csv` (columns: `module, version, installer, qsub_file,
+   This writes `analysis/failure_analysis.csv` (columns: `installer, module, version, qsub_file,
    test_result, category, confidence, method, harness_verdict, evidence, evidence_path, workdir`),
    one compact digest per failure in `analysis/failure_excerpts/`, and prints a category tally +
    the count needing review. `method=regex` marks rows classified by the signature table.
@@ -82,6 +87,10 @@ aborted before finishing (killed, timed out, or the run was interrupted).
   the current on-disk location.
 - test.qsub is read from its permanent source (`/share/pkg.8/.../test/test.qsub`, i.e. `out.csv`'s
   `test_path`), so analysis works even if the per-task copied `test/` dirs were deleted.
+- Three categories mean "not a package defect, no fix needed here": `test_template_not_implemented`
+  (no test written yet — the test.qsub is still the `xyz/0.0.0` skeleton), `mpi_interconnect_error`
+  (an InfiniBand/UCX fabric fault), and `transient_io_error` (a "missing" `/share/pkg` file that is
+  present and readable at analysis time). Report them as such rather than as broken packages.
 - `resource_fork_exhaustion` is the per-user process limit (`ulimit -u` / `RLIMIT_NPROC`) being
   exhausted — usually from running many tests with `--executor local` on a login node — not a
   package defect; those are re-runs on a compute node.
