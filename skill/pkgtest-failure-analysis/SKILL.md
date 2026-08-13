@@ -35,8 +35,13 @@ aborted before finishing (killed, timed out, or the run was interrupted).
 
 ## Workflow
 
-1. **Rebuild the report if needed.** If `analysis/report_out.csv` is absent, run
-   `python3 "$SK/rebuild_report.py"` (`module load python3` first only if `python3` is unavailable).
+1. **Rebuild the report if needed.** The pipeline's report is named after the input CSV:
+   `report_<input>.csv` (so `out.csv` → `report_out.csv`, but a run launched with
+   `modules_crontab.csv` yields `report_modules_crontab.csv`). If neither a top-level
+   `report_*.csv` nor `analysis/report_*.csv` exists, run `python3 "$SK/rebuild_report.py"`
+   (`module load python3` first only if `python3` is unavailable); it detects the input CSV and
+   writes `analysis/report_<input>.csv`. Do **not** rebuild just because `report_out.csv` is
+   absent — check for the run's actual name first.
 
 2. **First-pass triage.** Run:
    ```bash

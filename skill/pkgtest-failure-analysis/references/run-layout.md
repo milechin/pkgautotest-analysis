@@ -7,7 +7,17 @@ Reference for the `pkgtest-failure-analysis` skill: the structure of a
 
 - `out.csv` — the pipeline **input** produced by `find_qsub.py`: one row per module test to run.
   Key columns: `module_name_version`, `module_installer`, `module_category`, `module_install_date`,
-  `test_path` (the module's `test.qsub`), `qsub_options`.
+  `test_path` (the module's `test.qsub`), `qsub_options`. **The name is not fixed** — the file takes
+  the launcher's name (e.g. `modules_crontab.csv`), and the pipeline's report follows it as
+  `report_<input>.csv`. Detect it as the top-level `*.csv` whose header has `module_name_version`.
+- `skipped.log` — the complement of that input, also from `find_qsub.py`: the modules it did **not**
+  emit a row for. `-----`-separated blocks, each a heading line ending in `:` then one entry per
+  line — currently `Excluded modules:` (bare module names, i.e. every version, from find_qsub.py's
+  blanket exclusion list — typically GUI/interactive/meta packages that are impractical to test)
+  and `Tests skipped due to missing a test.qsub:` (`module/version,<pkg_dir>` — no test written).
+  These modules never became tasks, so they appear in no report and in no `work/` dir: they are
+  **untested**, which is not the same as passing. `render_summary.py` appends them to
+  `failure_summary.md` as "Not tested" so a reader does not mistake absence for success.
 - `work/XX/<hash>/` — one directory **per Nextflow task** (per test). `XX` = first 2 hex chars of
   the task hash.
 - `.nextflow.log*`, `.nextflow/` — engine logs/history (task id → module → workdir; concurrency).

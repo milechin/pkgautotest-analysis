@@ -77,7 +77,8 @@ def find_run_root(explicit=None):
     for start in (Path.cwd(), Path(__file__).resolve().parent):
         s = start.resolve()
         for cand in (s, *s.parents):
-            if (cand / "out.csv").is_file() and (cand / "work").is_dir():
+            # Any top-level *.csv: the input CSV takes the launcher's name, not always out.csv.
+            if (cand / "work").is_dir() and any(cand.glob("*.csv")):
                 return cand
     return Path.cwd()
 

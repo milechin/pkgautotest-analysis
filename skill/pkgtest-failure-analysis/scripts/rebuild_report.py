@@ -57,19 +57,36 @@ TEST_DIR_RE = re.compile(r"TEST_DIR=`dirname\s+(\S+)`")
 
 
 def find_run_root(explicit=None):
-    """Return the PkgAutoTest run root (dir containing out.csv and work/).
+    """Return the PkgAutoTest run root (dir holding work/ and the input CSV).
     If --run-dir is given, use it. Otherwise search ancestors of the current
     working directory first (the intuitive case: run from inside the run dir),
     then ancestors of this script (so the installed <run>/.claude/skills/.../
-    scripts/ layout also resolves)."""
+    scripts/ layout also resolves). The input CSV is NOT always named out.csv --
+    it takes the launcher's name (e.g. modules_crontab.csv) -- so any top-level
+    *.csv alongside work/ identifies the root."""
     if explicit:
         return Path(explicit).resolve()
     for start in (Path.cwd(), Path(__file__).resolve().parent):
         s = start.resolve()
         for cand in (s, *s.parents):
-            if (cand / "out.csv").is_file() and (cand / "work").is_dir():
+            if (cand / "work").is_dir() and any(cand.glob("*.csv")):
                 return cand
     return Path.cwd()
+
+
+def detect_input_csv(run_dir):
+    """The run's input CSV: <run>/out.csv, or whatever it was named instead.
+    The pipeline names its outputs report_<input>.csv, so exclude those and
+    require the input's own header column."""
+    cands = [run_dir / "out.csv"] if (run_dir / "out.csv").is_file() else []
+    cands += sorted(p for p in run_dir.glob("*.csv")
+                    if not p.name.startswith("report_") and p.name != "out.csv")
+    for p in cands:
+        with open(p, newline="") as fh:
+            header = fh.readline()
+        if "module_name_version" in header:
+            return p
+    return run_dir / "out.csv"
 
 
 def parse_args(argv=None):
@@ -78,19 +95,22 @@ def parse_args(argv=None):
     p.add_argument("--run-dir", type=Path, default=None,
                    help="Pipeline run root containing out.csv and work/ (auto-detected from CWD)")
     p.add_argument("--input-csv", type=Path, default=None,
-                   help="Input CSV from find_qsub.py (default: <run-dir>/out.csv)")
+                   help="Input CSV from find_qsub.py (default: the run's own input CSV, "
+                        "usually <run-dir>/out.csv)")
     p.add_argument("--work-dir", type=Path, default=None,
                    help="Nextflow work directory (default: <run-dir>/work)")
     p.add_argument("--output", type=Path, default=None,
-                   help="Output report path (default: <run-dir>/analysis/report_out.csv)")
+                   help="Output report path (default: <run-dir>/analysis/report_<input>.csv, "
+                        "matching the name the pipeline itself would write)")
     args = p.parse_args(argv)
     args.run_dir = find_run_root(args.run_dir)
     if args.input_csv is None:
-        args.input_csv = args.run_dir / "out.csv"
+        args.input_csv = detect_input_csv(args.run_dir)
     if args.work_dir is None:
         args.work_dir = args.run_dir / "work"
     if args.output is None:
-        args.output = args.run_dir / "analysis" / "report_out.csv"
+        # Mirror the pipeline's own naming: report_<input>.csv.
+        args.output = args.run_dir / "analysis" / ("report_%s" % args.input_csv.name)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     return args
 

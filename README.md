@@ -132,7 +132,7 @@ skill/pkgtest-failure-analysis/       # skill 1: why individual tests failed
   SKILL.md
   references/categories.md            # failure taxonomy, signatures, noise-exclusion rules
   references/run-layout.md            # PkgAutoTest run directory structure
-  scripts/rebuild_report.py           # rebuild report_out.csv
+  scripts/rebuild_report.py           # rebuild report_<input>.csv
   scripts/triage_failures.py          # regex first-pass classifier + digest generator
   scripts/render_summary.py           # failure_analysis.csv -> failure_summary.md
 skill/pipeline-failure-analysis/      # skill 2: why the Nextflow pipeline terminated

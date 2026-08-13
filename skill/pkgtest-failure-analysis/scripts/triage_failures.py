@@ -98,19 +98,36 @@ CSV_COLUMNS = ["module", "version", "installer", "qsub_file", "test_result", "ca
 
 
 def find_run_root(explicit=None):
-    """Return the PkgAutoTest run root (dir containing out.csv and work/).
+    """Return the PkgAutoTest run root (dir holding work/ and the input CSV).
     If --run-dir is given, use it. Otherwise search ancestors of the current
     working directory first (the intuitive case: run from inside the run dir),
     then ancestors of this script (so the installed <run>/.claude/skills/.../
-    scripts/ layout also resolves)."""
+    scripts/ layout also resolves). The input CSV is NOT always named out.csv --
+    it takes the launcher's name (e.g. modules_crontab.csv) -- so any top-level
+    *.csv alongside work/ identifies the root."""
     if explicit:
         return Path(explicit).resolve()
     for start in (Path.cwd(), Path(__file__).resolve().parent):
         s = start.resolve()
         for cand in (s, *s.parents):
-            if (cand / "out.csv").is_file() and (cand / "work").is_dir():
+            if (cand / "work").is_dir() and any(cand.glob("*.csv")):
                 return cand
     return Path.cwd()
+
+
+def detect_input_csv(run_dir):
+    """The run's input CSV: <run>/out.csv, or whatever it was named instead.
+    The pipeline names its outputs report_<input>.csv, so exclude those (and
+    skipped.log-style leftovers) and require the input's own header column."""
+    cands = [run_dir / "out.csv"] if (run_dir / "out.csv").is_file() else []
+    cands += sorted(p for p in run_dir.glob("*.csv")
+                    if not p.name.startswith("report_") and p.name != "out.csv")
+    for p in cands:
+        with open(p, newline="") as fh:
+            header = fh.readline()
+        if "module_name_version" in header:
+            return p
+    return run_dir / "out.csv"
 
 
 def parse_args(argv=None):
@@ -135,7 +152,7 @@ def parse_args(argv=None):
     a = p.parse_args(argv)
     a.run_dir = find_run_root(a.run_dir)
     a.work_dir = a.work_dir or a.run_dir / "work"
-    a.input_csv = a.input_csv or a.run_dir / "out.csv"
+    a.input_csv = a.input_csv or detect_input_csv(a.run_dir)
     a.output = a.output or a.run_dir / "analysis" / "failure_analysis.csv"
     a.digests_dir = a.digests_dir or a.run_dir / "analysis" / "failure_excerpts"
     a.output.parent.mkdir(parents=True, exist_ok=True)
