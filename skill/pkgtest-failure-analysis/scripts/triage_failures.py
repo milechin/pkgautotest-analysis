@@ -42,6 +42,11 @@ SIGNATURES = [
     ("module_load_failed", "high",
      r"Lmod has detected the following error|Unable to load module because of error|"
      r"module\(s\) are unknown|Cannot load module .* because these module", None),
+    # Apptainer/Singularity could not start the container: a bind source (e.g. /rproject) is
+    # absent on the node. Genuine infrastructure cause; outranks missing_file_or_input, which
+    # would otherwise be the nearest bucket.
+    ("container_bind_mount_failure", "high",
+     r"mount source \S+ doesn't exist|container creation failed: mount hook", None),
     ("missing_shared_library", "high",
      r"error while loading shared libraries|cannot open shared object file|"
      r"ImportError: .*\.so[0-9.]*:|undefined symbol:|"
@@ -93,6 +98,14 @@ SIGNATURES = [
      # The pipeline greps $LOG_FILE unconditionally; a test.qsub that delegates to a sibling
      # script may never write log.txt, so this line is harness noise, not the failure.
      r"grep: .*\blog\.txt: No such file"),
+    # Symptom-like categories, last: they only name where the test gave up, so every genuine
+    # cause above wins. "Waiting for Xvfb" alone is deliberately NOT a signature -- it is
+    # printed on healthy GUI starts (qupath's real failure was an unrelated stale-output error).
+    ("gui_display_failure", "medium",
+     r"java\.awt\.HeadlessException|VisIt's viewer exited abnormally|GUI failed to run|"
+     r"Couldn't configure togl widget", None),
+    ("output_comparison_failed", "medium",
+     r"File content check failed", None),
 ]
 # Compile once.
 SIGNATURES = [(c, conf, re.compile(inc, re.IGNORECASE),
@@ -113,6 +126,45 @@ SHARE_PATH_RE = re.compile(r"(/share/pkg[^\s'\"()]*)")
 
 # Evidence sources, scanned in this order (stderr first: root errors surface there).
 EVIDENCE_FILES = [".command.err", "log.txt", ".command.out"]
+
+# Error-line filter, used to pick an `unknown` row's evidence line. KEEP IN SYNC with the copy in
+# render_summary.py (the scripts are standalone, so it is duplicated). Keyword-based: it finds
+# *candidate* evidence for a human, and never decides `category`.
+KEY_RE = re.compile(
+    r"error|fail|fatal|exception|traceback|cannot|can't|not found|no such|denied|killed|abort|"
+    r"segfault|invalid|timeout|timed out|refused|unable|illegal|munmap|core dumped|signal 11|"
+    r"exists!", re.IGNORECASE)
+WARN_RE = re.compile(
+    r"warn|^INFO:|^\s+at |mendel_errors|[A-Za-z_]*errors?\s*=\s*[\d.]+|_CFLAGS|Werror|Error=[\d.]+",
+    re.IGNORECASE)
+WARN_BLOCK_START_RE = re.compile(r"^\++\s.*WARNINGS")   # e.g. AFNI's IMAGE SAVE SETUP WARNINGS
+WARN_BLOCK_END_RE = re.compile(r"^\++\s*$")
+
+
+def error_lines(text):
+    """[(1-based line number, line)] of error-related lines: KEY matches, WARN does not, and
+    lines inside a `+++ ... WARNINGS` ... `++++` banner block are skipped."""
+    found, in_block = [], False
+    for n, ln in enumerate(text.splitlines(), 1):
+        if in_block:
+            in_block = not WARN_BLOCK_END_RE.match(ln)
+            continue
+        if WARN_BLOCK_START_RE.match(ln):
+            in_block = True
+            continue
+        if KEY_RE.search(ln) and not WARN_RE.search(ln):
+            found.append((n, ln.strip()))
+    return found
+
+
+def first_error_line(task_dir):
+    """(file name, line) of the first error-related line in .command.err, else log.txt."""
+    for fname in (".command.err", "log.txt"):
+        found = error_lines(read_text(task_dir / fname, ""))
+        if found:
+            return fname, found[0][1][:300]
+    return "", ""
+
 
 # installer leads: the first question about a failure is usually who owns the package.
 # Consumers read this CSV by column name (csv.DictReader), never by position.
@@ -201,6 +253,21 @@ def load_out_csv(path):
     return by_mod
 
 
+def read_metrics(path):
+    """Return test_metrics.csv's data row as {column: value}, or None if there is no data row.
+
+    Columns are looked up by header name: the column set has grown over time (`test_path` is
+    now last, after `workdir`), so positions are not stable. If the header lacks the known
+    names, fall back to the original layout (test_result 4th, workdir last)."""
+    rows = [r for r in csv.reader(read_text(path).splitlines(), skipinitialspace=True) if r]
+    if len(rows) < 2:
+        return None
+    header, row = [h.strip() for h in rows[0]], [v.strip() for v in rows[1]]
+    if "test_result" in header and "workdir" in header:
+        return dict(zip(header, row))
+    return {"test_result": row[3] if len(row) > 3 else "", "workdir": row[-1]}
+
+
 def detect_official_root(work_dir):
     """Infer the official/recorded run root from a test_metrics.csv workdir column
     (the run may have been relocated; the recorded path is the canonical one)."""
@@ -208,9 +275,9 @@ def detect_official_root(work_dir):
         for task_dir in level1.iterdir():
             m = task_dir / "test_metrics.csv"
             if m.is_file():
-                lines = read_text(m).splitlines()
-                if len(lines) >= 2 and "/work/" in lines[1]:
-                    return lines[1].split(",")[-1].strip().split("/work/")[0]
+                rec = read_metrics(m)
+                if rec and "/work/" in rec.get("workdir", ""):
+                    return rec["workdir"].split("/work/")[0]
     return None
 
 
@@ -229,11 +296,8 @@ def status_of(task_dir):
     """Return 'FAILED'/'PASSED' from test_metrics.csv, or 'INCOMPLETE' if none."""
     metrics = task_dir / "test_metrics.csv"
     if metrics.is_file():
-        lines = read_text(metrics).splitlines()
-        if len(lines) >= 2 and lines[1].strip():
-            parts = lines[1].split(",")
-            return parts[3].strip() if len(parts) > 3 else ""
-        return ""  # malformed metrics -> treat as non-failing (skip)
+        rec = read_metrics(metrics)
+        return rec.get("test_result", "") if rec else ""  # malformed -> non-failing (skip)
     return "INCOMPLETE"
 
 
@@ -322,7 +386,15 @@ def classify(task_dir, test_path=None, status="FAILED"):
         stray = stray_stdout(task_dir)
         if stray:
             return "stray_stdout", "high", "results.txt", stray
-    return "unknown", "none", "", ""
+        # Symptom only: the task ended before any command wrote Passed/Error. The cause
+        # (timeout, kill, early exit) is not recoverable from the task files.
+        res = read_text(task_dir / "results.txt", None)
+        if res is not None and not res.strip():
+            return ("task_ended_early", "medium", "results.txt",
+                    "results.txt is empty (no Passed/Error written)")
+    # Still unknown: no category, but surface the first error-looking line as a lead.
+    ev_src, ev_line = first_error_line(task_dir)
+    return "unknown", "none", ev_src, ev_line
 
 
 def harness_verdict(task_dir):
@@ -333,6 +405,47 @@ def harness_verdict(task_dir):
         if v not in found:
             found.append(v)
     return "; ".join(found)
+
+
+ERR_ECHO_RE = re.compile(r"^\s*echo\s+[\"']?Error[\"']?\s*(#.*)?$")
+IF_RE = re.compile(r"^\s*(if|elif)\b")
+TEST_COND_RE = re.compile(r"^\s*(if|elif)\s+(!\s*)?(\[|test\b|\(\()")   # `if [ ... ]`: the command precedes
+
+
+def failing_commands(qsub_text, results_text, limit=5):
+    """Best-effort map of each `Error` in results.txt to the test.qsub command that emitted it.
+
+    Assumes the usual shape: one `<command>` / `if [ $? -eq 0 ]; then echo Passed; else echo
+    Error; fi` block per check, so the Nth Passed/Error line of results.txt belongs to the Nth
+    `echo Error` branch. Loops, helper functions and conditional checks break that; the digest
+    labels the output best-effort. Returns [(results_line_no, qsub_line_no, [command lines])]."""
+    src = qsub_text.splitlines()
+    branches = [i for i, ln in enumerate(src) if ERR_ECHO_RE.match(ln)]
+    verdicts = [ln.strip() for ln in results_text.splitlines() if ln.strip() in ("Passed", "Error")]
+    out = []
+    for pos, v in enumerate(verdicts):
+        if v != "Error" or pos >= len(branches):
+            continue
+        i = branches[pos]
+        while i >= 0 and not IF_RE.match(src[i]):
+            i -= 1
+        if i < 0:
+            continue
+        if TEST_COND_RE.match(src[i]):           # command is on the line(s) before the `if`
+            j = i - 1
+            while j >= 0 and (not src[j].strip() or src[j].lstrip().startswith("#")):
+                j -= 1
+            end = j
+            while j > 0 and src[j - 1].rstrip().endswith("\\"):
+                j -= 1                            # include backslash-continued lines
+            cmd = (src[j:end + 1] if end >= 0 else []) + [src[i]]   # keep the `if` for context
+        else:                                     # `if <command>; then` — the if is the command
+            j, cmd = i, [src[i]]
+        if cmd:
+            out.append((pos + 1, j + 1, [c.rstrip()[:200] for c in cmd[:4]]))
+        if len(out) >= limit:
+            break
+    return out
 
 
 def write_digest(digests_dir, module, qsub_file, task_dir, test_path, display_dir=None):
@@ -348,6 +461,21 @@ def write_digest(digests_dir, module, qsub_file, task_dir, test_path, display_di
 
     parts.append("\n" + "=" * 70 + "\n## results.txt  (ordered Passed/Error; Nth Error = Nth test.qsub command)\n" + "=" * 70)
     parts.append(read_text(task_dir / "results.txt", "<empty>"))
+
+    results_text = read_text(task_dir / "results.txt", "")
+    parts.append("\n" + "=" * 70 + "\n## Failing command(s)  (BEST-EFFORT: Nth Passed/Error line of "
+                 "results.txt <-> Nth `echo Error` branch of test.qsub; verify against the source "
+                 "above)\n" + "=" * 70)
+    if not results_text.strip():
+        parts.append("<results.txt is empty: the task ended before any check reported>")
+    else:
+        fails = failing_commands(read_text(Path(qsub_src), "") if qsub_src else "", results_text)
+        if fails:
+            for res_no, qsub_no, cmd in fails:
+                parts.append("results.txt line %d = Error  ->  test.qsub line %d:" % (res_no, qsub_no))
+                parts.extend("    " + c for c in cmd)
+        else:
+            parts.append("<none mapped (no Error, or test.qsub not in the usual check shape)>")
 
     parts.append("\n" + "=" * 70 + "\n## .command.err  (first 15 lines)\n" + "=" * 70)
     err = read_text(task_dir / ".command.err", "").splitlines()

@@ -68,6 +68,8 @@ JVM) are the same root cause at two levels.
 There is no test suite, lint, or build. The scripts are **Python 3.6+, standard library only — no
 `pip`, no third-party packages, no `module load` required** (must run on the SCC default `python3`).
 Preserve that constraint; do not add imports outside the stdlib.
+On 3.6 specifically: `re.split` on a zero-width pattern raises `ValueError` (walk lines or use
+`re.finditer` offsets), and `subprocess.run(capture_output=...)` does not exist.
 
 To exercise a change you need a real run dir — ask the user which one to use; runs are transient and
 none is referenced here on purpose. Prefer one that exercises the case you touched (e.g. an aborted

@@ -3,9 +3,10 @@
 
 Part of the `pkgtest-failure-analysis` skill. Deterministically turns the per-test
 `failure_analysis.csv` into a grouped, human-readable `failure_summary.md`: a category
-count table, then per-module bullets (module/version, installer, the classifying evidence
-line, and the full path to the log file it came from), plus a "Needs review" section for
-`unknown` rows. It also appends the modules `find_qsub.py` skipped before the run (from
+count table (each category linking to its section), then per category a module index and one
+block per module (result, installer, working directory, and a table of key excerpts from
+`results.txt` / `.command.err` / `log.txt`). `unknown` rows use the same block as every other
+category. `missing_shared_library` also gets a table of the libraries identified. It also appends the modules `find_qsub.py` skipped before the run (from
 `skipped.log`), which are absent from the run rather than passing. All counts are computed
 from the CSV and that log, not hard-coded.
 
@@ -76,6 +77,18 @@ DESC = {
         "A file the test could not open is present and readable at analysis time — the failure "
         "was transient (filesystem hiccup, or a container missing the right `--bind`) rather "
         "than a packaging error. Re-run.",
+    "container_bind_mount_failure":
+        "The container could not start because a bind-mount source (e.g. `/rproject`) does not "
+        "exist on the node — an environment/site problem rather than a package defect.",
+    "gui_display_failure":
+        "A GUI test failed for lack of a usable display (`HeadlessException`, viewer/GUI launch "
+        "failure, `togl` widget). `Waiting for Xvfb` alone is not evidence.",
+    "output_comparison_failed":
+        "The harness's output check (`File content check failed`) found the output differed from "
+        "the reference; the logs do not say why.",
+    "task_ended_early":
+        "`results.txt` is empty: the task ended before any check reported. Symptom only — the "
+        "cause (timeout, kill, early exit) is not recoverable from the task files.",
     "unknown":
         "No signature matched and the logs gave no determinable cause; needs human review "
         "(see the digest).",
@@ -133,6 +146,7 @@ def parse_args(argv=None):
     a.input = Path(a.input) if a.input else adir / "failure_analysis.csv"
     a.output = Path(a.output) if a.output else adir / "failure_summary.md"
     a.skipped_log = Path(a.skipped_log) if a.skipped_log else run_root / "skipped.log"
+    a.run_root = run_root
     return a
 
 
@@ -180,6 +194,120 @@ def render_skipped(blocks, has_template_rows):
     return out
 
 
+# Error-line filter for the key-excerpt table. KEEP IN SYNC with the copy in triage_failures.py
+# (the scripts are standalone). Keyword-based: an aid for finding evidence, never a classifier.
+KEY_RE = re.compile(
+    r"error|fail|fatal|exception|traceback|cannot|can't|not found|no such|denied|killed|abort|"
+    r"segfault|invalid|timeout|timed out|refused|unable|illegal|munmap|core dumped|signal 11|"
+    r"exists!", re.IGNORECASE)
+WARN_RE = re.compile(
+    r"warn|^INFO:|^\s+at |mendel_errors|[A-Za-z_]*errors?\s*=\s*[\d.]+|_CFLAGS|Werror|Error=[\d.]+",
+    re.IGNORECASE)
+WARN_BLOCK_START_RE = re.compile(r"^\++\s.*WARNINGS")   # e.g. AFNI's IMAGE SAVE SETUP WARNINGS
+WARN_BLOCK_END_RE = re.compile(r"^\++\s*$")
+
+LIB_RE = re.compile(r"(lib[\w.+-]+\.so[\w.]*):? cannot open shared object file")
+GLIBC_RE = re.compile(r"`(GLIBC[\w.]*)' not found")
+GLIBC_LABEL = "`libc.so.6` — %s not found"
+
+
+def error_lines(text):
+    """[(1-based line number, line)] of error-related lines (KEY and not WARN), skipping any
+    `+++ ... WARNINGS` ... `++++` banner block. Walks lines by index: no zero-width re.split
+    (a ValueError on the SCC default Python 3.6)."""
+    found, in_block = [], False
+    for n, ln in enumerate(text.splitlines(), 1):
+        if in_block:
+            in_block = not WARN_BLOCK_END_RE.match(ln)
+            continue
+        if WARN_BLOCK_START_RE.match(ln):
+            in_block = True
+            continue
+        if KEY_RE.search(ln) and not WARN_RE.search(ln):
+            found.append((n, ln.strip()))
+    return found
+
+
+def md_cell(text, width=160):
+    """Make text safe for a Markdown table cell."""
+    return text[:width].replace("|", "\\|").replace("`", "'")
+
+
+def local_taskdir(workdir, run_root):
+    """The CSV records the official workdir; the run may since have moved. Re-root onto the
+    local work/ dir when the recorded path is not there."""
+    p = Path(workdir)
+    if p.is_dir() or "/work/" not in workdir:
+        return p
+    return run_root / "work" / workdir.split("/work/", 1)[1]
+
+
+def excerpt_cell(path, kind):
+    """Key-excerpt cell for one log file: error lines (first 2 + last 2 past 4) as `L<n>: ...`."""
+    try:
+        text = open(str(path), errors="replace").read()
+    except OSError:
+        return "not present"
+    if not text.strip():
+        return "empty"
+    found = error_lines(text)
+    if not found:
+        if kind == "err":
+            n = sum(1 for ln in text.splitlines() if ln.strip())
+            return "no error lines (%d lines of non-error output)" % n
+        return "no error lines"
+    if len(found) > 4:
+        found = found[:2] + found[-2:]
+    return "<br>".join("L%d: %s" % (n, md_cell(ln)) for n, ln in found)
+
+
+def results_cell(path):
+    try:
+        text = open(str(path), errors="replace").read()
+    except OSError:
+        return "not present"
+    words = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return " → ".join(md_cell(w) for w in words) if words else "(empty — no Passed/Error written)"
+
+
+def missing_libraries(rows, run_root):
+    """{label: [module, ...]} for missing_shared_library rows, from each task's log.txt and
+    .command.err. A `GLIBC_x not found` is a different failure (the library is there but too
+    old), so it gets its own `libc.so.6 — GLIBC_x not found` label rather than a .so name."""
+    libs = defaultdict(set)
+    glibc_vers, glibc_mods = set(), set()
+    for r in rows:
+        td = local_taskdir(r["workdir"], run_root)
+        text = ""
+        for fname in ("log.txt", ".command.err"):
+            try:
+                text += open(str(td / fname), errors="replace").read() + "\n"
+            except OSError:
+                pass
+        for lib in LIB_RE.findall(text):
+            libs[("`%s`" % lib)].add(r["module"])
+        for ver in GLIBC_RE.findall(text):
+            glibc_vers.add(ver)
+            glibc_mods.add(r["module"])
+    if glibc_vers:
+        libs[GLIBC_LABEL % " / ".join("`%s`" % v for v in sorted(glibc_vers))] = glibc_mods
+    return {k: sorted(v, key=str.lower) for k, v in libs.items()}
+
+
+def render_missing_libraries(libs):
+    out = ["**Missing libraries identified:**\n", "| Library | Modules | Note |", "|---|---|---|"]
+    for lib in sorted(libs, key=lambda k: (k.startswith("`libc.so.6`"), k.lower())):
+        note = "bundled `libc.so.6` is older than the binary needs (not a missing file)" \
+            if lib.startswith("`libc.so.6`") else ""
+        out.append("| %s | %s | %s |" % (lib, ", ".join(libs[lib]), note))
+    out.append("")
+    return out
+
+
+def mod_anchor(module):
+    return "mod-" + re.sub(r"[^A-Za-z0-9._-]", "_", module)
+
+
 def safe_name(module, qsub_file):
     return "".join(ch if ch.isalnum() or ch in "._-" else "_"
                    for ch in "%s__%s" % (module, qsub_file))
@@ -187,6 +315,7 @@ def safe_name(module, qsub_file):
 
 def main(argv=None):
     a = parse_args(argv)
+    run_root = a.run_root
     if not a.input.is_file():
         sys.exit("error: %s not found (run triage_failures.py first)" % a.input)
 
@@ -216,36 +345,40 @@ def main(argv=None):
     out.append("| Category | Count | Meaning |")
     out.append("|---|---:|---|")
     for c in order:
-        meaning = describe(c).split(" — ")[0][:90]
-        out.append("| `%s` | %d | %s |" % (c, len(by_cat[c]), meaning))
+        meaning = describe(c).split(" — ")[0]
+        if len(meaning) > 90:
+            meaning = meaning[:90].rsplit(" ", 1)[0] + " …"
+        out.append("| [`%s`](#cat-%s) | %d | %s |" % (c, c, len(by_cat[c]), meaning))
     out.append("")
-    out.append(CAVEAT)
+    if "resource_fork_exhaustion" in by_cat or n_incomplete:
+        out.append(CAVEAT)
 
     out.append("## Failures by category\n")
     for c in order:
         items = sorted(by_cat[c], key=lambda r: r["module"].lower())
+        out.append('<a id="cat-%s"></a>' % c)
         out.append("### `%s`  (%d)\n" % (c, len(items)))
         out.append(describe(c) + "\n")
+        if c == "missing_shared_library":
+            libs = missing_libraries(items, run_root)
+            if libs:
+                out += render_missing_libraries(libs)
+        out.append(" · ".join("[%s](#%s)" % (r["module"], mod_anchor(r["module"])) for r in items))
+        out.append("")
         for r in items:
-            ev = r["evidence"].strip() or "(no evidence line; see digest)"
-            inst = (", installer: %s" % r["installer"]) if r.get("installer") else ""
-            out.append("- **%s** (%s%s) — %s" % (r["module"], r["test_result"], inst, ev))
-            if r["evidence_path"]:
-                out.append("  `%s`" % r["evidence_path"])
-        out.append("")
-
-    unk = sorted(by_cat.get("unknown", []), key=lambda r: r["module"].lower())
-    if unk:
-        out.append("## Needs review (unknown)\n")
-        out.append("No signature matched and no clear cause in the logs (often headless "
-                   "GUI/X-display apps, no-log cases, or version mismatches). Open the digest "
-                   "to classify by hand:\n")
-        for r in unk:
-            inst = (" (installer: %s)" % r["installer"]) if r.get("installer") else ""
-            out.append("- **%s**%s — harness: %s — `failure_excerpts/%s.txt`"
-                       % (r["module"], inst, r["harness_verdict"] or "(none)",
-                          safe_name(r["module"], r["qsub_file"])))
-        out.append("")
+            td = local_taskdir(r["workdir"], run_root)
+            out.append('<a id="%s"></a>' % mod_anchor(r["module"]))
+            out.append("#### %s\n" % r["module"])
+            out.append("- **Test result:** %s" % r["test_result"])
+            if r.get("installer"):
+                out.append("- **Installer:** %s" % r["installer"])
+            out.append("- **Working directory:** `%s`\n" % r["workdir"])
+            out.append("| Log file | Key excerpt |")
+            out.append("|---|---|")
+            out.append("| `results.txt` | %s |" % results_cell(td / "results.txt"))
+            out.append("| `.command.err` | %s |" % excerpt_cell(td / ".command.err", "err"))
+            out.append("| `log.txt` | %s |" % excerpt_cell(td / "log.txt", "log"))
+            out.append("")
 
     if skipped:
         out += render_skipped(skipped, "test_template_not_implemented" in by_cat)

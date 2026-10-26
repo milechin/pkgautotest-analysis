@@ -75,9 +75,17 @@ and crash symptoms are not mislabeled.
    conflicts. `Lmod has detected the following error`, `Unable to load module because of error`,
    `module(s) are unknown`, `Cannot load module X because these module(s) are loaded`.
    Example: `cellranger/7.2.0`.
+2a. **container_bind_mount_failure** (high) — the container could not start because a bind-mount
+   source does not exist on the node: `FATAL: container creation failed: mount hook function
+   failure: ... mount source /rproject doesn't exist`. Site/environment, not a package defect;
+   outranks `missing_file_or_input`, which is the nearest bucket otherwise. Examples: `qgis/3.28.14`,
+   `3.34.5`, `3.40.14`, `metontiime/2.1.0` (all `/rproject`).
 3. **missing_shared_library** (high) — a runtime `.so` cannot be found/resolved.
    `error while loading shared libraries`, `cannot open shared object file`,
-   `ImportError: <lib>.so...:`, `undefined symbol:`. Examples: `gdal/3.10.2`
+   `ImportError: <lib>.so...:`, `undefined symbol:`. The summary tabulates the libraries
+   identified (`lib….so` from `log.txt`/`.command.err`); a `` `GLIBC_x' not found`` is reported on
+   its own row because the library is present but too old (e.g. `delft3d/142586`'s bundled
+   `libc.so.6`), not missing. Examples: `gdal/3.10.2`
    (`liblber-2.4.so.2`), `lammps/2Aug2023` (`libnetcdf.so.15`).
 4. **linker_compile_failure** (high) — a test that compiles/links a program fails at build.
    `/usr/bin/ld:`, `undefined reference to`, `collect2: error`, `cannot find -l`,
@@ -142,6 +150,17 @@ and crash symptoms are not mislabeled.
     container started without the right `--bind`. The evidence is annotated
     `[file present and readable at analysis time]`. **Fix: re-run.** Example: `astra-sim/2.2.0`
     (a Singularity run failing to open an `.et` file that exists, mode 644, unchanged for months).
+19a. **gui_display_failure** (medium, symptom tier) — a GUI test failed for lack of a usable
+    display: `java.awt.HeadlessException`, `VisIt's viewer exited abnormally` / `GUI failed to run`,
+    Tcl `Couldn't configure togl widget`. Examples: `structure/2.3.4`, `visit/3.3.3`,
+    `xcrysden/1.6.2`. **`Waiting for Xvfb… attempt N` is NOT a signature**: it is printed on healthy
+    starts, and qupath/0.5.1's real failure was an unrelated stale-output error
+    (`Output file … exists!`). Other GUI apps in the same run (afni, totalview) have no regex-able
+    display error and stay `unknown` unless adjudicated.
+19b. **output_comparison_failed** (medium, symptom tier) — the harness's `File content check
+    failed, test #N of M`: an output differed from its stored reference. Says *that* it differed,
+    not why; read the delegated command's output in `log.txt` for the cause. Examples: `mpfr/4.2.1`,
+    `reflinker/1.0`, `dfam-tetools/1.95`.
 20. **stray_stdout** (high) — the test failed **only because something other than `Passed`/`Error`
    reached stdout**, breaking rule 3 of the harness contract. There is no `Error` line at all:
    `results.txt` holds ≥1 `Passed` plus at least one other line, and `tests_failed=0` on a FAILED
@@ -152,6 +171,10 @@ and crash symptoms are not mislabeled.
    nothing matched is the stray line itself the whole story. Also skipped when an `Error` exists (the
    failing check is then the cause) and for `INCOMPLETE` tasks (never got a verdict; `results.txt`
    was cut off mid-run). See `harness-contract.md` for the three-part pass criterion.
+20a. **task_ended_early** (medium, symptom only) — `results.txt` exists but is empty on a FAILED
+    task: it ended before any check reported (timeout, kill, early exit). Not a log signature; a
+    fallback after `stray_stdout`. The cause is not recoverable from the task files. Example:
+    `shapeit/5.1.1`.
 21. **unknown** — no signature matched; must be adjudicated from the digest (test.qsub + logs). If
     still undeterminable, leave `unknown` and list under "Needs review".
 

@@ -55,7 +55,9 @@ aborted before finishing (killed, timed out, or the run was interrupted).
    This writes `analysis/failure_analysis.csv` (columns: `installer, module, version, qsub_file,
    test_result, category, confidence, method, harness_verdict, evidence, evidence_path, workdir`),
    one compact digest per failure in `analysis/failure_excerpts/`, and prints a category tally +
-   the count needing review. `method=regex` marks rows classified by the signature table.
+   the count needing review. `method=regex` marks rows classified by the signature table. For an
+   `unknown` row, `evidence` holds the first error-looking line of `.command.err`/`log.txt` as a
+   *lead* only — a keyword match, not a diagnosis.
 
 3. **Adjudicate the uncertain rows (Claude judgment).** For each row where `category=unknown`,
    `confidence` is `low`/`none`, OR `category=resource_fork_exhaustion` **and** the digest also
@@ -63,7 +65,9 @@ aborted before finishing (killed, timed out, or the run was interrupted).
    `analysis/failure_excerpts/<module>__<qsub_file>.txt`. It contains the **test.qsub**,
    `results.txt` (Passed/Error sequence), the `.command.err` head, and the `log.txt` tail. Using
    `references/categories.md`:
-   - Map the failing `Error`(s) to their test.qsub command(s).
+   - Map the failing `Error`(s) to their test.qsub command(s). The digest's "Failing command(s)"
+     block does this best-effort (Nth `Passed`/`Error` line ↔ Nth `echo Error` branch); check it
+     against the test.qsub above it, since loops and helper functions defeat the parse.
    - Determine the root cause **per the test.qsub logic**; ignore warnings and the documented noise.
    - Update that row in `analysis/failure_analysis.csv` in place: set `category`, `confidence`,
      `method=claude`, and set `evidence` + `evidence_path` to the specific line and its file
@@ -72,10 +76,19 @@ aborted before finishing (killed, timed out, or the run was interrupted).
      `analysis/skill_improvement_suggestions.md` (step 5).
    Leave a row `unknown` only if the logs genuinely lack a determinable cause.
 
+   CSV rows are keyed by `module` = `name/version` (e.g. `qgis/3.40.14`), **not** the bare name. A
+   bulk edit keyed by bare name matches nothing and fails silently — have any snippet you write
+   print how many rows it updated, and stop if that is 0.
+
 4. **Render the summary.** Run `python3 "$SK/render_summary.py"` to (re)generate
-   `analysis/failure_summary.md` from the (now-adjudicated) CSV — a category count table, per-module
-   bullets (module/version, installer, evidence, full `evidence_path`), a "Needs review" section,
-   and a **"Not tested"** section listing the modules `find_qsub.py` skipped before the run (parsed
+   `analysis/failure_summary.md` from the (now-adjudicated) CSV — a category count table (each name
+   links to its section), then per category a module index and one block per module (result,
+   installer, working directory, and a table of key excerpts from `results.txt`, `.command.err` and
+   `log.txt`; `unknown` rows use the same block). The excerpts are error-keyword lines for finding
+   evidence, not a classifier. The `missing_shared_library` section also tabulates the libraries
+   identified, with GLIBC-too-old reported separately from a missing `.so`. The
+   `resource_fork_exhaustion` interpretation note appears only when it applies. It ends with a
+   **"Not tested"** section listing the modules `find_qsub.py` skipped before the run (parsed
    from `<run>/skipped.log`: the blanket exclusion list plus modules with no `test.qsub`). Those
    never became tasks, so they are absent from every count — untested, not passing; report them that
    way. Pass `--skipped-log PATH` if the log is elsewhere, or `--no-skipped` to omit the section.
